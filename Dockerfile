@@ -15,4 +15,4 @@ COPY . .
 EXPOSE 5000
 
 # Flask appni ishga tushirish
-CMD ["python", "main.py"]
+CMD ["gunicorn", "app:app"]
