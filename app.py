@@ -1,44 +1,81 @@
 import os
-import hashlib
+import tempfile
+from flask import Flask, request, send_file, render_template
+from flask_cors import CORS
 import requests
-from flask import Flask, request, send_file
-from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
-CACHE_DIR = "cache"
-os.makedirs(CACHE_DIR, exist_ok=True)
+CORS(app)  # Frontend integratsiyasi uchun
 
-CONVERT_API_SECRET = "secret_key_585ab4d86b672f4a7cf317577eeed234_o1iAu2ae4130c0faea3f83fb367acc19c247d"
+# ILovePDF API kalit
+ILOVEPDF_SECRET = "secret_key_585ab4d86b672f4a7cf317577eeed234_o1iAu2ae4130c0faea3f83fb367acc19c247d"
+BASE_URL = "https://api.ilovepdf.com/v1"
 
-@app.route("/compress", methods=["POST"])
-def compress():
-    if "file" not in request.files:
-        return "Fayl yuborilmadi", 400
+# Health check yo‘li - UptimeRobot uchun
+@app.route("/ping")
+def ping():
+    return "pong", 200
 
-    file = request.files["file"]
-    filename = secure_filename(file.filename)
-    ext = filename.rsplit(".", 1)[-1].lower()
-    hash_name = hashlib.md5(file.read()).hexdigest()
-    file.seek(0)  # qayta o'qish uchun
+# HTML interfeysni ochish
+@app.route('/')
+def home():
+    return render_template("index.html")
 
-    cache_path = os.path.join(CACHE_DIR, f"{hash_name}.pdf")
-    if os.path.exists(cache_path):
-        return send_file(cache_path, as_attachment=True)
+# ILovePDF bilan fayl siqish
+@app.route('/compress', methods=['POST'])
+def compress_file():
+    file = request.files['file']
+    ext = file.filename.split('.')[-1].lower()
 
-    form_data = {"file": (filename, file.stream)}
-    url = f"https://v2.convertapi.com/convert/{ext}/to/pdf?Secret={CONVERT_API_SECRET}"
+    if ext == "pdf":
+        tool = "compress"
+    elif ext in ["jpg", "jpeg", "png"]:
+        tool = "imagecompress"
+    elif ext in ["docx", "pptx"]:
+        tool = "officepdf"
+    else:
+        return "Qo‘llab-quvvatlanmaydigan format", 400
 
-    r = requests.post(url, files=form_data)
-    if r.status_code != 200:
-        return f"Xatolik: {r.text}", 500
+    # Boshlanish task
+    task = requests.post(f"{BASE_URL}/start/{tool}", data={"public_key": ILOVEPDF_SECRET}).json()
 
-    result = r.json()
-    if "Files" not in result or not result["Files"]:
-        return "ConvertAPI javobi noto‘g‘ri", 500
+    # Faylni vaqtincha saqlash va yuklash
+    upload_url = task["server"]
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
+        file.save(tmp.name)
+        response = requests.post(
+            f"{upload_url}/v1/upload",
+            files={"file": open(tmp.name, "rb")},
+            data={"task": task["task"]}
+        )
+    file_data = response.json()
 
-    pdf_url = result["Files"][0]["Url"]
-    pdf_data = requests.get(pdf_url)
-    with open(cache_path, "wb") as f:
-        f.write(pdf_data.content)
+    # Agar office bo‘lsa, PDFga aylantiriladi, so‘ng siqiladi
+    if tool == "officepdf":
+        requests.post(f"{upload_url}/v1/process", data={"task": task["task"]}).json()
 
-    return send_file(cache_path, as_attachment=True)
+        # Yangi compress task
+        task2 = requests.post(f"{BASE_URL}/start/compress", data={"public_key": ILOVEPDF_SECRET}).json()
+        upload_url2 = task2["server"]
+        response2 = requests.post(
+            f"{upload_url2}/v1/upload",
+            files={"file": open(tmp.name, "rb")},
+            data={"task": task2["task"]}
+        )
+        requests.post(f"{upload_url2}/v1/process", data={"task": task2["task"]})
+        download_info = requests.get(f"{upload_url2}/v1/download/{task2['task']}").json()
+    else:
+        requests.post(f"{upload_url}/v1/process", data={"task": task["task"]})
+        download_info = requests.get(f"{upload_url}/v1/download/{task['task']}").json()
+
+    # Yuklab olish
+    file_url = download_info['download_url']
+    response = requests.get(file_url)
+    output_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    with open(output_file.name, 'wb') as f:
+        f.write(response.content)
+
+    return send_file(output_file.name, as_attachment=True, download_name="compressed.pdf")
+
+if __name__ == '__main__':
+    app.run(debug=True)
