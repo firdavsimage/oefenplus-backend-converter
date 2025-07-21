@@ -1,11 +1,15 @@
 import os
 import tempfile
-from flask import Flask, request, send_file, render_template
+from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
 import requests
 
 app = Flask(__name__)
 CORS(app, origins=["https://oefenplus.uz"])
+
+@app.route("/api/compress", methods=["POST"])
+def compress():
+    return jsonify({"message": "Compress endpoint is working"})
 
 
 # ILovePDF API kalitlari
