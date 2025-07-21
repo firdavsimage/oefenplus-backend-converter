@@ -1,68 +1,86 @@
-import os
-import tempfile
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
-import requests
-from werkzeug.utils import secure_filename
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Faylni siqish – Oefen</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    body {
+      background: linear-gradient(135deg, #FF973F, #B33F21);
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col items-center py-10 px-4 text-gray-900">
+  <header class="w-full max-w-4xl flex justify-between items-center mb-10 px-6 py-4 rounded-xl shadow-md" style="background-color: #87BD6A;">
+    <a href="https://oefen.uz">
+      <img src="https://oefen.uz/assets/img/logo.png" alt="Oefen.uz Logo" class="h-16">
+    </a>
+    <a href="https://oefen.uz" class="text-white text-lg underline">Bosh sahifa</a>
+  </header>
 
-app = Flask(__name__)
-CORS(app)
+  <section class="w-full max-w-4xl bg-white bg-opacity-95 rounded-2xl shadow-lg p-6">
+    <h2 class="text-xl font-semibold mb-4">1. JPG, PNG, PDF, Word yoki PowerPoint faylini yuklang</h2>
+    <input id="fileInput" type="file" accept=".jpg,.jpeg,.png,.pdf,.doc,.docx,.ppt,.pptx" class="mb-4 w-full border p-2 rounded" />
+    <button id="compressBtn" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700">🔧 Siqishni boshlash</button>
+    <div id="loading" class="mt-4 hidden text-gray-700">⏳ Fayl siqilmoqda...</div>
+    <div id="result" class="mt-6 hidden">
+      <h3 class="text-lg font-semibold mb-2">2. Siqilgan fayl tayyor:</h3>
+      <a id="downloadLink" class="inline-block bg-green-600 text-white py-2 px-4 rounded hover:bg-green-700" download>⬇️ Yuklab olish</a>
+    </div>
+  </section>
 
-# PDF.co API KEY
-PDFCO_API_KEY = "oefen.uz@gmail.com_5UDt3xOMzK4KbsHaiXY6twp8jsjiygoiVESOcJlMTCoXFgUP5T6BnylqcTSyR48O"
+<script>
+  const fileInput = document.getElementById("fileInput");
+  const compressBtn = document.getElementById("compressBtn");
+  const loading = document.getElementById("loading");
+  const result = document.getElementById("result");
+  const downloadLink = document.getElementById("downloadLink");
 
-@app.route("/")
-def index():
-    return "PDF.co Compress Converter ishlayapti!"
+  compressBtn.addEventListener("click", async () => {
+    const file = fileInput.files[0];
+    if (!file) {
+      alert("Iltimos, fayl tanlang.");
+      return;
+    }
 
-@app.route("/ping")
-def ping():
-    return jsonify({"message": "pong"}), 200
+    loading.classList.remove("hidden");
+    result.classList.add("hidden");
 
-@app.route("/api/compress", methods=["POST"])
-def compress_file():
-    if 'file' not in request.files:
-        return jsonify({"error": "Fayl yuborilmadi"}), 400
+    const formData = new FormData();
+    formData.append("file", file);
 
-    uploaded_file = request.files['file']
-    filename = secure_filename(uploaded_file.filename)
+    try {
+      const response = await fetch("https://oefenplus-backend-converter.onrender.com/api/compress", {
+        method: "POST",
+        body: formData
+      });
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp:
-        uploaded_file.save(tmp.name)
-        input_path = tmp.name
+      if (!response.ok) {
+        throw new Error("Server xatosi yoki faylni qaytara olmadi.");
+      }
 
-    try:
-        # Faylni PDF.co serveriga yuborish
-        with open(input_path, 'rb') as f:
-            response = requests.post(
-                "https://api.pdf.co/v1/pdf/convert/to/pdf",
-                headers={"x-api-key": PDFCO_API_KEY},
-                files={"file": (filename, f)},
-                data={"name": "compressed-output.pdf"}
-            )
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
 
-        if response.status_code != 200 or not response.json().get("url"):
-            return jsonify({"error": "Siqish vaqtida xatolik", "detail": response.text}), 500
+      // Fayl nomi
+      let filename = "compressed_" + file.name;
+      const contentDisposition = response.headers.get("Content-Disposition");
+      if (contentDisposition && contentDisposition.includes("filename=")) {
+        filename = contentDisposition.split("filename=")[1].replace(/"/g, '');
+      }
 
-        # Siqilgan faylni yuklab olish
-        download_url = response.json()["url"]
-        download_response = requests.get(download_url, stream=True)
+      downloadLink.href = url;
+      downloadLink.download = filename;
+      result.classList.remove("hidden");
 
-        if download_response.status_code != 200:
-            return jsonify({"error": "Yuklab olishda xatolik", "detail": download_response.text}), 500
+    } catch (error) {
+      alert("Xatolik: " + error.message);
+    } finally {
+      loading.classList.add("hidden");
+    }
+  });
+</script>
 
-        output_path = os.path.join(tempfile.gettempdir(), "compressed_" + filename + ".pdf")
-        with open(output_path, "wb") as f:
-            for chunk in download_response.iter_content(chunk_size=1024):
-                f.write(chunk)
-
-        return send_file(output_path, as_attachment=True)
-
-    except Exception as e:
-        return jsonify({"error": "Server xatosi", "detail": str(e)}), 500
-    finally:
-        if os.path.exists(input_path):
-            os.remove(input_path)
-
-if __name__ == "__main__":
-    app.run(debug=True)
+</body>
+</html>
