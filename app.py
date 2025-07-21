@@ -8,7 +8,7 @@ from werkzeug.utils import secure_filename
 app = Flask(__name__)
 CORS(app)
 
-# ILovePDF API kalitlari
+# Yangi API kalitlar
 PUBLIC_KEY = "project_public_75ac534f3100a01d912c0b16a62b4294_pn67M040b8b2ae23a4c254fcfb92cf0889ec8"
 SECRET_KEY = "secret_key_cd62d359458853c2d2d90ff0c83a40f1_IQbCN31adb55313dbd7ef362e72bd55aa4f0d"
 
@@ -28,7 +28,9 @@ def compress_pdf():
     file = request.files['file']
     filename = secure_filename(file.filename)
 
-    # Faylni vaqtinchalik saqlash
+    if not filename.lower().endswith('.pdf'):
+        return jsonify({"error": "Faqat PDF fayllar qabul qilinadi"}), 400
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
         file.save(tmp_file.name)
         tmp_file_path = tmp_file.name
@@ -36,44 +38,47 @@ def compress_pdf():
     output_path = os.path.join(tempfile.gettempdir(), "compressed_" + filename)
 
     try:
-        # 1. Task yaratish
-        start_res = requests.post("https://api.ilovepdf.com/v1/start/compress", data={"public_key": PUBLIC_KEY})
+        # Boshlanish
+        start_res = requests.post(
+            "https://api.ilovepdf.com/v1/start/compress",
+            json={"public_key": PUBLIC_KEY}
+        )
         if start_res.status_code != 200:
-            return jsonify({"error": "Task yaratishda xatolik", "response": start_res.text}), 500
+            return jsonify({"error": "start/compress xatolik", "response": start_res.text}), 500
 
-        start_data = start_res.json()
-        task = start_data["task"]
-        server = start_data["server"]
+        task_data = start_res.json()
+        task = task_data["task"]
+        server = task_data["server"]
 
-        # 2. Faylni yuklash
+        # Fayl yuklash
         upload_url = f"https://{server}/v1/upload"
         with open(tmp_file_path, "rb") as f:
-            upload_res = requests.post(upload_url, data={"task": task}, files={"file": f})
+            upload_res = requests.post(
+                upload_url,
+                data={"task": task},
+                files={"file": (filename, f)}
+            )
+
         if upload_res.status_code != 200:
-            return jsonify({"error": "Faylni yuklashda xatolik", "response": upload_res.text}), 500
+            return jsonify({"error": "Fayl yuklashda xatolik", "response": upload_res.text}), 500
 
-        uploaded_data = upload_res.json()
-        server_filename = uploaded_data["server_filename"]
-
-        # 3. Siqishni boshlash
-        process_url = f"https://{server}/v1/process"
-        process_res = requests.post(process_url, data={
-            "task": task,
-            "tool": "compress",
-            "files": server_filename
-        })
+        # Faylni siqish
+        process_res = requests.post(
+            f"https://{server}/v1/process",
+            json={"task": task, "tool": "compress"}
+        )
         if process_res.status_code != 200:
-            return jsonify({"error": "Faylni siqishda xatolik", "response": process_res.text}), 500
+            return jsonify({"error": "Siqishda xatolik", "response": process_res.text}), 500
 
-        # 4. Siqilgan faylni yuklab olish
-        download_url = f"https://{server}/v1/download/{task}"
-        download_res = requests.get(download_url, stream=True)
+        # Natijani yuklab olish
+        download_res = requests.get(f"https://{server}/v1/download/{task}", stream=True)
         if download_res.status_code != 200:
-            return jsonify({"error": "Siqilgan faylni yuklab olishda xatolik", "response": download_res.text}), 500
+            return jsonify({"error": "Yuklab olishda xatolik", "response": download_res.text}), 500
 
-        with open(output_path, "wb") as out_file:
-            for chunk in download_res.iter_content(1024):
-                out_file.write(chunk)
+        with open(output_path, "wb") as f:
+            for chunk in download_res.iter_content(chunk_size=1024):
+                if chunk:
+                    f.write(chunk)
 
         return send_file(output_path, as_attachment=True)
 
