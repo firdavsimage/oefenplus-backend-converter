@@ -5,77 +5,71 @@ from flask_cors import CORS
 import requests
 
 app = Flask(__name__)
-CORS(app)  # Frontend integratsiyasi uchun
+CORS(app)
 
-# ILovePDF API kalit
+# ILovePDF API kalitlari
 ILOVEPDF_SECRET = "secret_key_585ab4d86b672f4a7cf317577eeed234_o1iAu2ae4130c0faea3f83fb367acc19c247d"
 BASE_URL = "https://api.ilovepdf.com/v1"
 
-# Health check yo‘li - UptimeRobot uchun
 @app.route("/ping")
 def ping():
     return "pong", 200
 
-# HTML interfeysni ochish
-@app.route('/')
-def home():
+@app.route("/")
+def index():
     return render_template("index.html")
 
-# ILovePDF bilan fayl siqish
 @app.route('/compress', methods=['POST'])
 def compress_file():
-    file = request.files['file']
-    ext = file.filename.split('.')[-1].lower()
+    uploaded_file = request.files['file']
+    filename = uploaded_file.filename
+    ext = filename.rsplit('.', 1)[-1].lower()
 
     if ext == "pdf":
         tool = "compress"
+        output_ext = ".pdf"
     elif ext in ["jpg", "jpeg", "png"]:
         tool = "imagecompress"
+        output_ext = f".{ext}"
     elif ext in ["docx", "pptx"]:
         tool = "officepdf"
+        output_ext = ".pdf"
     else:
         return "Qo‘llab-quvvatlanmaydigan format", 400
 
-    # Boshlanish task
+    # Start task
     task = requests.post(f"{BASE_URL}/start/{tool}", data={"public_key": ILOVEPDF_SECRET}).json()
-
-    # Faylni vaqtincha saqlash va yuklash
     upload_url = task["server"]
+
+    # Faylni vaqtincha saqlash
     with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
-        file.save(tmp.name)
+        uploaded_file.save(tmp.name)
+        tmp_file_path = tmp.name
+
+    # Upload
+    with open(tmp_file_path, "rb") as f:
         response = requests.post(
             f"{upload_url}/v1/upload",
-            files={"file": open(tmp.name, "rb")},
+            files={"file": f},
             data={"task": task["task"]}
         )
-    file_data = response.json()
+    if response.status_code != 200:
+        return "Yuklashda xatolik", 500
 
-    # Agar office bo‘lsa, PDFga aylantiriladi, so‘ng siqiladi
-    if tool == "officepdf":
-        requests.post(f"{upload_url}/v1/process", data={"task": task["task"]}).json()
+    # Process
+    requests.post(f"{upload_url}/v1/process", data={"task": task["task"]})
 
-        # Yangi compress task
-        task2 = requests.post(f"{BASE_URL}/start/compress", data={"public_key": ILOVEPDF_SECRET}).json()
-        upload_url2 = task2["server"]
-        response2 = requests.post(
-            f"{upload_url2}/v1/upload",
-            files={"file": open(tmp.name, "rb")},
-            data={"task": task2["task"]}
-        )
-        requests.post(f"{upload_url2}/v1/process", data={"task": task2["task"]})
-        download_info = requests.get(f"{upload_url2}/v1/download/{task2['task']}").json()
-    else:
-        requests.post(f"{upload_url}/v1/process", data={"task": task["task"]})
-        download_info = requests.get(f"{upload_url}/v1/download/{task['task']}").json()
-
-    # Yuklab olish
+    # Download
+    download_info = requests.get(f"{upload_url}/v1/download/{task['task']}").json()
     file_url = download_info['download_url']
+
+    # Final download
     response = requests.get(file_url)
-    output_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    output_file = tempfile.NamedTemporaryFile(delete=False, suffix=output_ext)
     with open(output_file.name, 'wb') as f:
         f.write(response.content)
 
-    return send_file(output_file.name, as_attachment=True, download_name="compressed.pdf")
+    return send_file(output_file.name, as_attachment=True, download_name=f"compressed{output_ext}")
 
 if __name__ == '__main__':
     app.run(debug=True)
