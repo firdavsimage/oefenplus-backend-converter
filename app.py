@@ -1,86 +1,77 @@
-<!DOCTYPE html>
-<html lang="uz">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Faylni siqish – Oefen</title>
-  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-  <style>
-    body {
-      background: linear-gradient(135deg, #FF973F, #B33F21);
-    }
-  </style>
-</head>
-<body class="min-h-screen flex flex-col items-center py-10 px-4 text-gray-900">
-  <header class="w-full max-w-4xl flex justify-between items-center mb-10 px-6 py-4 rounded-xl shadow-md" style="background-color: #87BD6A;">
-    <a href="https://oefen.uz">
-      <img src="https://oefen.uz/assets/img/logo.png" alt="Oefen.uz Logo" class="h-16">
-    </a>
-    <a href="https://oefen.uz" class="text-white text-lg underline">Bosh sahifa</a>
-  </header>
+from flask import Flask, request, send_file, jsonify
+import tempfile
+import os
+from PIL import Image
+from PyPDF2 import PdfReader, PdfWriter
+from docx import Document
+from pptx import Presentation
 
-  <section class="w-full max-w-4xl bg-white bg-opacity-95 rounded-2xl shadow-lg p-6">
-    <h2 class="text-xl font-semibold mb-4">1. JPG, PNG, PDF, Word yoki PowerPoint faylini yuklang</h2>
-    <input id="fileInput" type="file" accept=".jpg,.jpeg,.png,.pdf,.doc,.docx,.ppt,.pptx" class="mb-4 w-full border p-2 rounded" />
-    <button id="compressBtn" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700">🔧 Siqishni boshlash</button>
-    <div id="loading" class="mt-4 hidden text-gray-700">⏳ Fayl siqilmoqda...</div>
-    <div id="result" class="mt-6 hidden">
-      <h3 class="text-lg font-semibold mb-2">2. Siqilgan fayl tayyor:</h3>
-      <a id="downloadLink" class="inline-block bg-green-600 text-white py-2 px-4 rounded hover:bg-green-700" download>⬇️ Yuklab olish</a>
-    </div>
-  </section>
+app = Flask(__name__)
 
-<script>
-  const fileInput = document.getElementById("fileInput");
-  const compressBtn = document.getElementById("compressBtn");
-  const loading = document.getElementById("loading");
-  const result = document.getElementById("result");
-  const downloadLink = document.getElementById("downloadLink");
+def compress_image(input_path, output_path, quality=60):
+    img = Image.open(input_path)
+    img.save(output_path, optimize=True, quality=quality)
 
-  compressBtn.addEventListener("click", async () => {
-    const file = fileInput.files[0];
-    if (!file) {
-      alert("Iltimos, fayl tanlang.");
-      return;
-    }
+def compress_pdf(input_path, output_path):
+    reader = PdfReader(input_path)
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    with open(output_path, "wb") as f:
+        writer.write(f)
 
-    loading.classList.remove("hidden");
-    result.classList.add("hidden");
+def compress_docx(input_path, output_path):
+    doc = Document(input_path)
+    for shape in doc.inline_shapes:
+        if shape.type == 3:
+            shape.width = int(shape.width * 0.7)
+            shape.height = int(shape.height * 0.7)
+    doc.save(output_path)
 
-    const formData = new FormData();
-    formData.append("file", file);
+def compress_pptx(input_path, output_path):
+    prs = Presentation(input_path)
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if shape.shape_type == 13:
+                shape.width = int(shape.width * 0.7)
+                shape.height = int(shape.height * 0.7)
+    prs.save(output_path)
 
-    try {
-      const response = await fetch("https://oefenplus-backend-converter.onrender.com/api/compress", {
-        method: "POST",
-        body: formData
-      });
+def compress_file(input_path, output_path):
+    ext = input_path.lower().split('.')[-1]
+    if ext in ['jpg', 'jpeg', 'png']:
+        compress_image(input_path, output_path)
+    elif ext == 'pdf':
+        compress_pdf(input_path, output_path)
+    elif ext == 'docx':
+        compress_docx(input_path, output_path)
+    elif ext == 'pptx':
+        compress_pptx(input_path, output_path)
+    else:
+        raise ValueError("Fayl turini aniqlab bo‘lmadi")
 
-      if (!response.ok) {
-        throw new Error("Server xatosi yoki faylni qaytara olmadi.");
-      }
+@app.route("/api/compress", methods=["POST"])
+def compress_endpoint():
+    if 'file' not in request.files:
+        return jsonify({"error": "Fayl topilmadi"}), 400
 
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "Fayl tanlanmagan"}), 400
 
-      // Fayl nomi
-      let filename = "compressed_" + file.name;
-      const contentDisposition = response.headers.get("Content-Disposition");
-      if (contentDisposition && contentDisposition.includes("filename=")) {
-        filename = contentDisposition.split("filename=")[1].replace(/"/g, '');
-      }
+    ext = file.filename.rsplit('.', 1)[-1].lower()
 
-      downloadLink.href = url;
-      downloadLink.download = filename;
-      result.classList.remove("hidden");
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = os.path.join(tmpdir, f"input.{ext}")
+        output_path = os.path.join(tmpdir, f"output.{ext}")
+        file.save(input_path)
 
-    } catch (error) {
-      alert("Xatolik: " + error.message);
-    } finally {
-      loading.classList.add("hidden");
-    }
-  });
-</script>
+        try:
+            compress_file(input_path, output_path)
+            return send_file(output_path, as_attachment=True, download_name=f"compressed.{ext}")
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
-</body>
-</html>
+@app.route("/ping")
+def ping():
+    return "pong"
