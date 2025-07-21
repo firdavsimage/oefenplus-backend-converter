@@ -1,4 +1,5 @@
 from flask import Flask, request, send_file, jsonify
+from flask_cors import CORS
 import tempfile
 import os
 from PIL import Image
@@ -7,6 +8,7 @@ from docx import Document
 from pptx import Presentation
 
 app = Flask(__name__)
+CORS(app)  # CORS muammosini hal qiladi
 
 def compress_image(input_path, output_path, quality=60):
     img = Image.open(input_path)
