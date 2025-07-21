@@ -1,6 +1,6 @@
 import os
 import tempfile
-from flask import Flask, request, send_file, render_template, jsonify
+from flask import Flask, request, send_file, render_template_string, jsonify
 from flask_cors import CORS
 import requests
 
@@ -18,7 +18,7 @@ def ping():
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template_string("<h1>ILovePDF backend ishlayapti</h1>")
 
 @app.route("/api/compress", methods=["POST"])
 def compress_file():
@@ -29,7 +29,7 @@ def compress_file():
     filename = uploaded_file.filename
     ext = filename.rsplit('.', 1)[-1].lower()
 
-    # ILovePDF vositasini aniqlash
+    # ILovePDF vositasi tanlanadi
     if ext == "pdf":
         tool = "compress"
         output_ext = ".pdf"
@@ -70,7 +70,7 @@ def compress_file():
         )
         process_response.raise_for_status()
 
-        # Yuklab olish linkini olish
+        # Yuklab olish linki
         download_info = requests.get(f"{upload_url}/v1/download/{task['task']}")
         download_info.raise_for_status()
         file_url = download_info.json()['download_url']
@@ -85,9 +85,9 @@ def compress_file():
         return send_file(output_file.name, as_attachment=True, download_name=f"compressed{output_ext}")
 
     except requests.RequestException as e:
-        return jsonify({"error": f"Server bilan aloqa muvaffaqiyatsiz: {str(e)}"}), 500
+        return jsonify({"error": f"ILovePDF bilan aloqa xatosi: {str(e)}"}), 500
     except Exception as e:
         return jsonify({"error": f"Noma’lum xatolik: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False, host='0.0.0.0', port=5000)
