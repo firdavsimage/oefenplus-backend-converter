@@ -1,6 +1,6 @@
 import os
 import tempfile
-from flask import Flask, request, jsonify, send_file, render_template
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import requests
 from werkzeug.utils import secure_filename
@@ -8,82 +8,89 @@ from werkzeug.utils import secure_filename
 app = Flask(__name__)
 CORS(app)
 
-# ILovePDF API kalitlari (bevosita kodga kiritilgan)
-PUBLIC_KEY = "project_public_75ac534f3100a01d912c0b16a62b4294_pn67M040b8b2ae23a4c254fcfb92cf0889ec8"
-SECRET_KEY = "secret_key_cd62d359458853c2d2d90ff0c83a40f1_IQbCN31adb55313dbd7ef362e72bd55aa4f0d"
+# PDF.co API kaliti
+PDFCO_API_KEY = "oefen.uz@gmail.com_5UDt3xOMzK4KbsHaiXY6twp8jsjiygoiVESOcJlMTCoXFgUP5T6BnylqcTSyR48O"
 
 @app.route("/")
 def index():
-    return "ILovePDF Converter ishlayapti!"
+    return "PDF.co Converter ishlayapti!"
 
 @app.route("/ping")
 def ping():
     return jsonify({"message": "pong"}), 200
 
 @app.route("/api/compress", methods=["POST"])
-def compress_pdf():
+def compress_file():
     if 'file' not in request.files:
         return jsonify({"error": "Fayl yuborilmadi"}), 400
 
     uploaded_file = request.files['file']
     filename = secure_filename(uploaded_file.filename)
+    ext = os.path.splitext(filename)[1].lower()
 
-    # Faylni vaqtinchalik saqlash
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+    # Faqat ruxsat etilgan formatlar
+    allowed = ['.pdf', '.jpg', '.jpeg', '.png', '.docx', '.pptx', '.xlsx']
+    if ext not in allowed:
+        return jsonify({"error": f"Bu fayl turi qo‘llab-quvvatlanmaydi: {ext}"}), 400
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
         uploaded_file.save(tmp.name)
-        file_path = tmp.name
+        local_file_path = tmp.name
 
     try:
-        # 1. Start compress task
-        start_res = requests.post("https://api.ilovepdf.com/v1/start/compress", json={
-            "public_key": PUBLIC_KEY
-        })
-        if start_res.status_code != 200:
-            return jsonify({"error": "Start bosqichida xatolik", "detail": start_res.text}), 500
+        # Faylni base64 formatga o‘girish
+        with open(local_file_path, "rb") as f:
+            file_data = f.read()
+        file_base64 = file_data.encode("base64") if hasattr(file_data, "encode") else file_data
 
-        task_data = start_res.json()
-        server = task_data["server"]
-        task = task_data["task"]
+        # PDF.co endpoint — universal siqish uchun (PDF va rasmlar uchun)
+        if ext == '.pdf':
+            endpoint = "https://api.pdf.co/v1/pdf/optimize"
+        elif ext in ['.jpg', '.jpeg', '.png']:
+            endpoint = "https://api.pdf.co/v1/pdf/convert/from/image"
+        elif ext == '.docx':
+            endpoint = "https://api.pdf.co/v1/pdf/convert/from/doc"
+        elif ext == '.pptx':
+            endpoint = "https://api.pdf.co/v1/pdf/convert/from/ppt"
+        elif ext == '.xlsx':
+            endpoint = "https://api.pdf.co/v1/pdf/convert/from/xls"
+        else:
+            return jsonify({"error": "Qo‘llanmaydigan fayl turi"}), 400
 
-        # 2. Upload file
-        with open(file_path, 'rb') as f:
-            upload_res = requests.post(
-                f"https://{server}/v1/upload",
-                data={"task": task},
-                files={"file": (filename, f)}
+        # PDF.co API chaqiruvi
+        with open(local_file_path, 'rb') as f:
+            response = requests.post(
+                url=endpoint,
+                headers={"x-api-key": PDFCO_API_KEY},
+                files={"file": (filename, f)},
+                data={}
             )
-        if upload_res.status_code != 200:
-            return jsonify({"error": "Yuklashda xatolik", "detail": upload_res.text}), 500
 
-        # 3. Process
-        process_res = requests.post(
-            f"https://{server}/v1/process",
-            json={"task": task}
-        )
-        if process_res.status_code != 200:
-            return jsonify({"error": "Process xatolik", "detail": process_res.text}), 500
+        if response.status_code != 200:
+            return jsonify({"error": "PDF.co API chaqiruvida xatolik", "detail": response.text}), 500
 
-        # 4. Download
-        download_res = requests.get(
-            f"https://{server}/v1/download/{task}",
-            stream=True
-        )
-        if download_res.status_code != 200:
-            return jsonify({"error": "Yuklab olishda xatolik", "detail": download_res.text}), 500
+        file_url = response.json().get("url")
+        if not file_url:
+            return jsonify({"error": "Natija URL topilmadi"}), 500
 
-        # Faylni saqlash va yuborish
+        # Natijani yuklab olish
+        r = requests.get(file_url, stream=True)
+        if r.status_code != 200:
+            return jsonify({"error": "Siqilgan faylni yuklab olishda xatolik"}), 500
+
         output_path = os.path.join(tempfile.gettempdir(), "compressed_" + filename)
         with open(output_path, "wb") as f:
-            for chunk in download_res.iter_content(chunk_size=1024):
+            for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
 
         return send_file(output_path, as_attachment=True)
 
     except Exception as e:
         return jsonify({"error": "Serverda xatolik", "detail": str(e)}), 500
+
     finally:
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        if os.path.exists(local_file_path):
+            os.remove(local_file_path)
 
 if __name__ == "__main__":
     app.run(debug=True)
