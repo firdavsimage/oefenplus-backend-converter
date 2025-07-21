@@ -1,16 +1,11 @@
 import os
 import tempfile
-from flask import Flask, request, send_file, jsonify
+from flask import Flask, request, send_file, render_template, jsonify
 from flask_cors import CORS
 import requests
 
 app = Flask(__name__)
 CORS(app, origins=["https://oefenplus.uz"])
-
-@app.route("/api/compress", methods=["POST"])
-def compress():
-    return jsonify({"message": "Compress endpoint is working"})
-
 
 # ILovePDF API kalitlari
 ILOVEPDF_SECRET = "secret_key_585ab4d86b672f4a7cf317577eeed234_o1iAu2ae4130c0faea3f83fb367acc19c247d"
@@ -24,8 +19,11 @@ def ping():
 def index():
     return render_template("index.html")
 
-@app.route('/compress', methods=['POST'])
+@app.route("/api/compress", methods=["POST"])
 def compress_file():
+    if 'file' not in request.files:
+        return jsonify({"error": "Fayl topilmadi"}), 400
+
     uploaded_file = request.files['file']
     filename = uploaded_file.filename
     ext = filename.rsplit('.', 1)[-1].lower()
@@ -40,7 +38,7 @@ def compress_file():
         tool = "officepdf"
         output_ext = ".pdf"
     else:
-        return "Qo‘llab-quvvatlanmaydigan format", 400
+        return jsonify({"error": "Qo‘llab-quvvatlanmaydigan format"}), 400
 
     # Start task
     task = requests.post(f"{BASE_URL}/start/{tool}", data={"public_key": ILOVEPDF_SECRET}).json()
@@ -59,10 +57,12 @@ def compress_file():
             data={"task": task["task"]}
         )
     if response.status_code != 200:
-        return "Yuklashda xatolik", 500
+        return jsonify({"error": "Yuklashda xatolik"}), 500
 
     # Process
-    requests.post(f"{upload_url}/v1/process", data={"task": task["task"]})
+    process_response = requests.post(f"{upload_url}/v1/process", data={"task": task["task"]})
+    if process_response.status_code != 200:
+        return jsonify({"error": "Ishlov berishda xatolik"}), 500
 
     # Download
     download_info = requests.get(f"{upload_url}/v1/download/{task['task']}").json()
