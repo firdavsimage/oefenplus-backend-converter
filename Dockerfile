@@ -14,5 +14,5 @@ COPY . .
 # Portni ochish (5000 — Flask porti)
 EXPOSE 5000
 
-# Flask appni ishga tushirish
-CMD ["gunicorn", "app:app"]
+# Flask appni Gunicorn orqali ishga tushirish
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "app:app"]
