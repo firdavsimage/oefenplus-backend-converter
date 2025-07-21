@@ -1,6 +1,6 @@
 import os
 import tempfile
-from flask import Flask, request, send_file, render_template_string, jsonify
+from flask import Flask, request, send_file, render_template, jsonify
 from flask_cors import CORS
 import requests
 
@@ -18,7 +18,7 @@ def ping():
 
 @app.route("/")
 def index():
-    return render_template_string("<h1>ILovePDF backend ishlayapti</h1>")
+    return render_template("index.html")
 
 @app.route("/api/compress", methods=["POST"])
 def compress_file():
@@ -29,7 +29,6 @@ def compress_file():
     filename = uploaded_file.filename
     ext = filename.rsplit('.', 1)[-1].lower()
 
-    # ILovePDF vositasi tanlanadi
     if ext == "pdf":
         tool = "compress"
         output_ext = ".pdf"
@@ -43,39 +42,43 @@ def compress_file():
         return jsonify({"error": "Qo‘llab-quvvatlanmaydigan format"}), 400
 
     try:
-        # Task yaratish
+        # 1. Task yaratish
         start_response = requests.post(f"{BASE_URL}/start/{tool}", data={"public_key": ILOVEPDF_PUBLIC_KEY})
+        print("Start javobi:", start_response.text)
         start_response.raise_for_status()
         task = start_response.json()
         upload_url = task["server"]
 
-        # Faylni vaqtincha saqlash
+        # 2. Faylni vaqtincha saqlash
         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
             uploaded_file.save(tmp.name)
             tmp_file_path = tmp.name
 
-        # Faylni yuklash
+        # 3. Faylni yuklash
         with open(tmp_file_path, "rb") as f:
             upload_response = requests.post(
                 f"{upload_url}/v1/upload",
                 files={"file": f},
                 data={"task": task["task"]}
             )
+        print("Upload javobi:", upload_response.text)
         upload_response.raise_for_status()
 
-        # Ishlov berish
+        # 4. Ishlov berish
         process_response = requests.post(
             f"{upload_url}/v1/process",
             data={"task": task["task"]}
         )
+        print("Process javobi:", process_response.text)
         process_response.raise_for_status()
 
-        # Yuklab olish linki
+        # 5. Yuklab olish linkini olish
         download_info = requests.get(f"{upload_url}/v1/download/{task['task']}")
+        print("Download info:", download_info.text)
         download_info.raise_for_status()
         file_url = download_info.json()['download_url']
 
-        # Final faylni yuklab olish
+        # 6. Final faylni yuklab olish
         final_response = requests.get(file_url)
         final_response.raise_for_status()
         output_file = tempfile.NamedTemporaryFile(delete=False, suffix=output_ext)
@@ -85,9 +88,11 @@ def compress_file():
         return send_file(output_file.name, as_attachment=True, download_name=f"compressed{output_ext}")
 
     except requests.RequestException as e:
-        return jsonify({"error": f"ILovePDF bilan aloqa xatosi: {str(e)}"}), 500
+        print("Requests xatolik:", str(e))
+        return jsonify({"error": f"Server bilan aloqa muvaffaqiyatsiz: {str(e)}"}), 500
     except Exception as e:
+        print("Umumiy xatolik:", str(e))
         return jsonify({"error": f"Noma’lum xatolik: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    app.run(debug=True)
