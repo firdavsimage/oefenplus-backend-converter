@@ -1,91 +1,94 @@
 import os
 import tempfile
-from flask import Flask, request, send_file, render_template_string, jsonify
+from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 import requests
 
 app = Flask(__name__)
-CORS(app, origins=["https://oefenplus.uz"])
+CORS(app)
 
-# ILovePDF API credentials
-ILOVEPDF_PUBLIC_KEY = "project_public_002668c65677139b50439696e90805e5_JO_Lt06e53e5275b342ceea0429acfc79f0d2"
-BASE_URL = "https://api.ilovepdf.com/v1"
-
-@app.route("/ping")
-def ping():
-    return "pong", 200
+# API kalitlaringiz
+PUBLIC_KEY = "project_public_75ac534f3100a01d912c0b16a62b4294_pn67M040b8b2ae23a4c254fcfb92cf0889ec8"
+SECRET_KEY = "secret_key_cd62d359458853c2d2d90ff0c83a40f1_IQbCN31adb55313dbd7ef362e72bd55aa4f0d"
 
 @app.route("/")
 def index():
-    return render_template_string("<h1>ILovePDF backend ishlayapti</h1>")
+    return render_template("index.html")
+
+@app.route("/ping")
+def ping():
+    return jsonify({"message": "ILovePDF backend ishlayapti"}), 200
 
 @app.route("/api/compress", methods=["POST"])
-def compress_file():
+def compress_pdf():
     if 'file' not in request.files:
-        return jsonify({"error": "Fayl topilmadi"}), 400
+        return jsonify({"error": "Fayl yuborilmadi"}), 400
 
-    uploaded_file = request.files['file']
-    filename = uploaded_file.filename
-    ext = os.path.splitext(filename)[-1].lower().replace('.', '')
+    file = request.files['file']
 
-    # Tanlov: qaysi ILovePDF tool ishlatiladi
-    if ext == "pdf":
-        tool = "compress"
-        output_ext = ".pdf"
-    elif ext in ["jpg", "jpeg", "png"]:
-        tool = "imagecompress"
-        output_ext = f".{ext}"
-    elif ext in ["docx", "pptx"]:
-        tool = "officepdf"
-        output_ext = ".pdf"
-    else:
-        return jsonify({"error": "Qo‘llab-quvvatlanmaydigan format"}), 400
+    # Faylni vaqtinchalik saqlash
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+        file.save(tmp_file.name)
+        tmp_file_path = tmp_file.name
 
     try:
-        # 1. Start task
-        start_response = requests.post(f"{BASE_URL}/start/{tool}", data={"public_key": ILOVEPDF_PUBLIC_KEY})
-        start_response.raise_for_status()
-        task_info = start_response.json()
-        task_id = task_info["task"]
-        server = task_info["server"]
-        server_url = f"https://{server}"
+        # ILovePDF API bilan sessiyani boshlash
+        start_res = requests.post(
+            "https://api.ilovepdf.com/v1/start/compress",
+            json={"public_key": PUBLIC_KEY}
+        )
+        start_data = start_res.json()
 
-        # 2. Faylni vaqtincha saqlash
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp:
-            uploaded_file.save(tmp.name)
-            tmp_file_path = tmp.name
+        if start_res.status_code != 200 or "server" not in start_data:
+            return jsonify({"error": "ILovePDF bilan ulanishda muammo", "response": start_data}), 500
 
-        # 3. Faylni yuklash
+        server = start_data["server"]
+        task = start_data["task"]
+
+        # Faylni yuklash
         with open(tmp_file_path, "rb") as f:
-            upload_response = requests.post(
-                f"{server_url}/v1/upload",
-                files={"file": f},
-                data={"task": task_id}
+            upload_res = requests.post(
+                f"https://{server}/v1/upload",
+                data={"task": task},
+                files={"file": (file.filename, f)}
             )
-        upload_response.raise_for_status()
+        upload_data = upload_res.json()
+        if upload_res.status_code != 200 or "server_filename" not in upload_data:
+            return jsonify({"error": "Faylni yuklashda xatolik", "response": upload_data}), 500
 
-        # 4. Process qilish
-        process_response = requests.post(f"{server_url}/v1/process", data={"task": task_id})
-        process_response.raise_for_status()
+        server_filename = upload_data["server_filename"]
 
-        # 5. Yuklab olish linkini olish
-        download_info = requests.get(f"{server_url}/v1/download/{task_id}")
-        download_info.raise_for_status()
-        file_url = download_info.json()['download_url']
+        # Siqishni boshlash
+        process_res = requests.post(
+            f"https://{server}/v1/process",
+            json={
+                "task": task,
+                "tool": "compress",
+                "files": [{"server_filename": server_filename, "filename": file.filename}],
+                "compression_level": "recommended"
+            }
+        )
+        process_data = process_res.json()
+        if process_res.status_code != 200 or "status" not in process_data:
+            return jsonify({"error": "Siqishda xatolik", "response": process_data}), 500
 
-        # 6. Yakuniy faylni olish
-        final_response = requests.get(file_url)
-        final_response.raise_for_status()
-        output_file = tempfile.NamedTemporaryFile(delete=False, suffix=output_ext)
-        with open(output_file.name, 'wb') as f:
-            f.write(final_response.content)
+        # Natijani yuklab olish
+        download_res = requests.get(
+            f"https://{server}/v1/download/{task}",
+            stream=True
+        )
+        output_path = os.path.join(tempfile.gettempdir(), "compressed_" + file.filename)
+        with open(output_path, "wb") as f:
+            for chunk in download_res.iter_content(chunk_size=1024):
+                if chunk:
+                    f.write(chunk)
 
-        return send_file(output_file.name, as_attachment=True, download_name=f"converted{output_ext}")
+        return send_file(output_path, as_attachment=True)
 
-    except requests.RequestException as e:
-        return jsonify({"error": f"ILovePDF bilan aloqa xatosi: {str(e)}"}), 500
     except Exception as e:
-        return jsonify({"error": f"Noma’lum xatolik: {str(e)}"}), 500
+        return jsonify({"error": "Xatolik yuz berdi", "detail": str(e)}), 500
+    finally:
+        os.remove(tmp_file_path)
 
-if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=5000)
+if __name__ == "__main__":
+    app.run(debug=True)
