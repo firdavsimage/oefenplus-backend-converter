@@ -2,5 +2,9 @@ Flask
 flask-cors
 python-dotenv
 requests
+Pillow
+PyPDF2
+python-docx
+python-pptx
 gunicorn
 
