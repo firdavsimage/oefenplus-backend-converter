@@ -4,17 +4,18 @@ from flask import Flask, request, jsonify, send_file
 from PIL import Image
 from docx import Document
 from pptx import Presentation
+from PyPDF2 import PdfReader, PdfWriter
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)  # CORS yoqilgan, frontenddan so‘rov bo‘lishi uchun
+CORS(app)
 
-# JPG/PNG siqish funksiyasi
+# JPG/PNG siqish
 def compress_jpg(input_path, output_path, quality=60):
     image = Image.open(input_path)
     image.save(output_path, optimize=True, quality=quality)
 
-# DOCX va PPTX fayllarni oddiy "saqlash" orqali siqish
+# DOCX/PPTX siqish (oddiy saqlash)
 def compress_office(input_path, output_path):
     if input_path.endswith(".docx"):
         doc = Document(input_path)
@@ -25,7 +26,20 @@ def compress_office(input_path, output_path):
     else:
         raise ValueError("Fayl formati noto‘g‘ri")
 
-# Siqish endpointi
+# PDF siqish
+def compress_pdf(input_path, output_path):
+    reader = PdfReader(input_path)
+    writer = PdfWriter()
+
+    for page in reader.pages:
+        writer.add_page(page)
+
+    # Qo‘shimcha metadata va siqishni yoqish (agar kerak bo‘lsa)
+    writer.add_metadata(reader.metadata)
+    with open(output_path, "wb") as f:
+        writer.write(f)
+
+# Siqish endpoint
 @app.route("/api/compress", methods=["POST"])
 def compress_file():
     if 'file' not in request.files:
@@ -45,6 +59,8 @@ def compress_file():
             compress_jpg(input_temp.name, output_temp.name)
         elif ext in ['docx', 'pptx']:
             compress_office(input_temp.name, output_temp.name)
+        elif ext == 'pdf':
+            compress_pdf(input_temp.name, output_temp.name)
         else:
             return jsonify({"error": "Fayl turi qo‘llab-quvvatlanmaydi"}), 400
 
@@ -58,7 +74,7 @@ def compress_file():
         if os.path.exists(output_temp.name):
             os.remove(output_temp.name)
 
-# Soddaroq sog‘liqni tekshirish endpoint
+# Ping endpoint
 @app.route("/ping", methods=["GET"])
 def ping():
     return "pong"
