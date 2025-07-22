@@ -2,11 +2,13 @@ import os
 import tempfile
 import requests
 from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = Flask(__name__)
+CORS(app)  # Barcha domenlarga ruxsat (yoki CORS(app, resources={r"/api/*": {"origins": "https://oefenplus.uz"}}))
 
 # API kalitlar
 TINIFY_API_KEY = os.getenv("TINIFY_API_KEY")
@@ -77,29 +79,31 @@ def compress_file():
 
     file = request.files['file']
     ext = file.filename.lower().split('.')[-1]
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as input_temp:
         file.save(input_temp.name)
-        output_temp = tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}")
-        output_temp.close()
 
-        try:
-            if ext in ['jpg', 'jpeg', 'png']:
-                compress_jpg(input_temp.name, output_temp.name)
-            elif ext == 'pdf':
-                compress_pdf(input_temp.name, output_temp.name)
-            elif ext in ['docx', 'pptx']:
-                compress_office(input_temp.name, output_temp.name)
-            else:
-                return jsonify({"error": "Qo‘llab-quvvatlanmaydigan fayl turi"}), 400
+    output_temp = tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}")
+    output_temp.close()
 
-            return send_file(output_temp.name, as_attachment=True, download_name=f"compressed.{ext}")
+    try:
+        if ext in ['jpg', 'jpeg', 'png']:
+            compress_jpg(input_temp.name, output_temp.name)
+        elif ext == 'pdf':
+            compress_pdf(input_temp.name, output_temp.name)
+        elif ext in ['docx', 'pptx']:
+            compress_office(input_temp.name, output_temp.name)
+        else:
+            return jsonify({"error": "Qo‘llab-quvvatlanmaydigan fayl turi"}), 400
 
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-        finally:
-            os.remove(input_temp.name)
-            if os.path.exists(output_temp.name):
-                os.remove(output_temp.name)
+        return send_file(output_temp.name, as_attachment=True, download_name=f"compressed.{ext}")
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        os.remove(input_temp.name)
+        if os.path.exists(output_temp.name):
+            os.remove(output_temp.name)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
