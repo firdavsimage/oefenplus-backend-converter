@@ -1,79 +1,91 @@
-from flask import Flask, request, send_file, jsonify
-from flask_cors import CORS
-import tempfile
 import os
-from PIL import Image
-from PyPDF2 import PdfReader, PdfWriter
-from docx import Document
-from pptx import Presentation
+import tempfile
+from flask import Flask, request, jsonify, send_file
+from dotenv import load_dotenv
+import requests
+from ilovepdf import ILovePdf
+
+load_dotenv()
 
 app = Flask(__name__)
-CORS(app)  # CORS muammosini hal qiladi
 
-def compress_image(input_path, output_path, quality=60):
-    img = Image.open(input_path)
-    img.save(output_path, optimize=True, quality=quality)
+# API kalitlar
+TINIFY_API_KEY = os.getenv("TINIFY_API_KEY")
+CLOUDMERSIVE_API_KEY = os.getenv("CLOUDMERSIVE_API_KEY")
+ILOVEPDF_PUBLIC_KEY = os.getenv("ILOVEPDF_PUBLIC_KEY")
 
-def compress_pdf(input_path, output_path):
-    reader = PdfReader(input_path)
-    writer = PdfWriter()
-    for page in reader.pages:
-        writer.add_page(page)
-    with open(output_path, "wb") as f:
-        writer.write(f)
+@app.route("/ping")
+def ping():
+    return "pong", 200
 
-def compress_docx(input_path, output_path):
-    doc = Document(input_path)
-    for shape in doc.inline_shapes:
-        if shape.type == 3:
-            shape.width = int(shape.width * 0.7)
-            shape.height = int(shape.height * 0.7)
-    doc.save(output_path)
+def compress_jpg(file_path, output_path):
+    endpoint = "https://api.tinify.com/shrink"
+    auth = requests.auth.HTTPBasicAuth("api", TINIFY_API_KEY)
+    with open(file_path, 'rb') as f:
+        response = requests.post(endpoint, auth=auth, data=f)
+    response.raise_for_status()
+    result_url = response.json()['output']['url']
+    result = requests.get(result_url)
+    with open(output_path, 'wb') as out:
+        out.write(result.content)
 
-def compress_pptx(input_path, output_path):
-    prs = Presentation(input_path)
-    for slide in prs.slides:
-        for shape in slide.shapes:
-            if shape.shape_type == 13:
-                shape.width = int(shape.width * 0.7)
-                shape.height = int(shape.height * 0.7)
-    prs.save(output_path)
+def compress_pdf(file_path, output_path):
+    ilovepdf = ILovePdf(ILOVEPDF_PUBLIC_KEY, verify_ssl=True)
+    task = ilovepdf.new_task("compress")
+    task.add_file(file_path)
+    task.set_output_folder(os.path.dirname(output_path))
+    task.execute()
+    task.download()
+    original_name = os.path.basename(file_path)
+    downloaded_file = os.path.join(os.path.dirname(output_path), original_name)
+    os.rename(downloaded_file, output_path)
 
-def compress_file(input_path, output_path):
-    ext = input_path.lower().split('.')[-1]
-    if ext in ['jpg', 'jpeg', 'png']:
-        compress_image(input_path, output_path)
-    elif ext == 'pdf':
-        compress_pdf(input_path, output_path)
-    elif ext == 'docx':
-        compress_docx(input_path, output_path)
-    elif ext == 'pptx':
-        compress_pptx(input_path, output_path)
-    else:
-        raise ValueError("Fayl turini aniqlab bo‘lmadi")
+def compress_office(file_path, output_path):
+    ext = file_path.lower().split('.')[-1]
+    endpoint_map = {
+        "docx": "https://api.cloudmersive.com/convert/docx/compress",
+        "pptx": "https://api.cloudmersive.com/convert/pptx/compress"
+    }
+    if ext not in endpoint_map:
+        raise ValueError("Fayl turi qo‘llab-quvvatlanmaydi.")
+    endpoint = endpoint_map[ext]
+    headers = {"Apikey": CLOUDMERSIVE_API_KEY}
+    files = {'inputFile': open(file_path, 'rb')}
+    response = requests.post(endpoint, headers=headers, files=files)
+    response.raise_for_status()
+    with open(output_path, 'wb') as out:
+        out.write(response.content)
 
 @app.route("/api/compress", methods=["POST"])
-def compress_endpoint():
+def compress_file():
     if 'file' not in request.files:
         return jsonify({"error": "Fayl topilmadi"}), 400
 
     file = request.files['file']
-    if file.filename == '':
-        return jsonify({"error": "Fayl tanlanmagan"}), 400
-
-    ext = file.filename.rsplit('.', 1)[-1].lower()
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_path = os.path.join(tmpdir, f"input.{ext}")
-        output_path = os.path.join(tmpdir, f"output.{ext}")
-        file.save(input_path)
+    ext = file.filename.lower().split('.')[-1]
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as input_temp:
+        file.save(input_temp.name)
+        output_temp = tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}")
+        output_temp.close()
 
         try:
-            compress_file(input_path, output_path)
-            return send_file(output_path, as_attachment=True, download_name=f"compressed.{ext}")
+            if ext in ['jpg', 'jpeg', 'png']:
+                compress_jpg(input_temp.name, output_temp.name)
+            elif ext == 'pdf':
+                compress_pdf(input_temp.name, output_temp.name)
+            elif ext in ['docx', 'pptx']:
+                compress_office(input_temp.name, output_temp.name)
+            else:
+                return jsonify({"error": "Qo‘llab-quvvatlanmaydigan fayl turi"}), 400
+
+            return send_file(output_temp.name, as_attachment=True, download_name=f"compressed.{ext}")
+
         except Exception as e:
             return jsonify({"error": str(e)}), 500
+        finally:
+            os.remove(input_temp.name)
+            if os.path.exists(output_temp.name):
+                os.remove(output_temp.name)
 
-@app.route("/ping")
-def ping():
-    return "pong"
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
