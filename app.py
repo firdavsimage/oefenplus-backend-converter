@@ -1,77 +1,31 @@
 import os
 import tempfile
-import requests
 from flask import Flask, request, jsonify, send_file
+from PIL import Image
+from docx import Document
+from pptx import Presentation
 from flask_cors import CORS
-from dotenv import load_dotenv
-
-load_dotenv()
 
 app = Flask(__name__)
-CORS(app)  # Barcha domenlarga ruxsat (yoki CORS(app, resources={r"/api/*": {"origins": "https://oefenplus.uz"}}))
+CORS(app)  # CORS yoqilgan, frontenddan so‘rov bo‘lishi uchun
 
-# API kalitlar
-TINIFY_API_KEY = os.getenv("TINIFY_API_KEY")
-CLOUDMERSIVE_API_KEY = os.getenv("CLOUDMERSIVE_API_KEY")
-ILOVEPDF_PUBLIC_KEY = os.getenv("ILOVEPDF_PUBLIC_KEY")
+# JPG/PNG siqish funksiyasi
+def compress_jpg(input_path, output_path, quality=60):
+    image = Image.open(input_path)
+    image.save(output_path, optimize=True, quality=quality)
 
-@app.route("/ping")
-def ping():
-    return "pong", 200
+# DOCX va PPTX fayllarni oddiy "saqlash" orqali siqish
+def compress_office(input_path, output_path):
+    if input_path.endswith(".docx"):
+        doc = Document(input_path)
+        doc.save(output_path)
+    elif input_path.endswith(".pptx"):
+        pres = Presentation(input_path)
+        pres.save(output_path)
+    else:
+        raise ValueError("Fayl formati noto‘g‘ri")
 
-def compress_jpg(file_path, output_path):
-    endpoint = "https://api.tinify.com/shrink"
-    auth = requests.auth.HTTPBasicAuth("api", TINIFY_API_KEY)
-    with open(file_path, 'rb') as f:
-        response = requests.post(endpoint, auth=auth, data=f)
-    response.raise_for_status()
-    result_url = response.json()['output']['url']
-    result = requests.get(result_url)
-    with open(output_path, 'wb') as out:
-        out.write(result.content)
-
-def compress_pdf(file_path, output_path):
-    # 1. Start task
-    start_url = "https://api.ilovepdf.com/v1/start/compress"
-    start_res = requests.post(start_url, data={"public_key": ILOVEPDF_PUBLIC_KEY})
-    start_res.raise_for_status()
-    task_info = start_res.json()
-    server = task_info["server"]
-    task = task_info["task"]
-
-    # 2. Upload file
-    with open(file_path, "rb") as f:
-        upload_res = requests.post(f"https://{server}/v1/upload", data={"task": task}, files={"file": f})
-    upload_res.raise_for_status()
-
-    # 3. Process
-    process_res = requests.post(f"https://{server}/v1/process", data={"task": task})
-    process_res.raise_for_status()
-
-    # 4. Download
-    download_res = requests.get(f"https://{server}/v1/download/{task}", stream=True)
-    download_res.raise_for_status()
-
-    with open(output_path, "wb") as out_file:
-        for chunk in download_res.iter_content(chunk_size=8192):
-            out_file.write(chunk)
-
-def compress_office(file_path, output_path):
-    ext = file_path.lower().split('.')[-1]
-    endpoint_map = {
-        "docx": "https://api.cloudmersive.com/convert/docx/compress",
-        "pptx": "https://api.cloudmersive.com/convert/pptx/compress"
-    }
-    if ext not in endpoint_map:
-        raise ValueError("Fayl turi qo‘llab-quvvatlanmaydi.")
-    endpoint = endpoint_map[ext]
-    headers = {"Apikey": CLOUDMERSIVE_API_KEY}
-    files = {'inputFile': open(file_path, 'rb')}
-    response = requests.post(endpoint, headers=headers, files=files)
-    response.raise_for_status()
-    with open(output_path, 'wb') as out:
-        out.write(response.content)
-
+# Siqish endpointi
 @app.route("/api/compress", methods=["POST"])
 def compress_file():
     if 'file' not in request.files:
@@ -89,21 +43,25 @@ def compress_file():
     try:
         if ext in ['jpg', 'jpeg', 'png']:
             compress_jpg(input_temp.name, output_temp.name)
-        elif ext == 'pdf':
-            compress_pdf(input_temp.name, output_temp.name)
         elif ext in ['docx', 'pptx']:
             compress_office(input_temp.name, output_temp.name)
         else:
-            return jsonify({"error": "Qo‘llab-quvvatlanmaydigan fayl turi"}), 400
+            return jsonify({"error": "Fayl turi qo‘llab-quvvatlanmaydi"}), 400
 
         return send_file(output_temp.name, as_attachment=True, download_name=f"compressed.{ext}")
-
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
     finally:
         os.remove(input_temp.name)
         if os.path.exists(output_temp.name):
             os.remove(output_temp.name)
 
+# Soddaroq sog‘liqni tekshirish endpoint
+@app.route("/ping", methods=["GET"])
+def ping():
+    return "pong"
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(debug=True)
